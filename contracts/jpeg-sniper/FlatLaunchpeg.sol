@@ -52,6 +52,9 @@ contract FlatLaunchpeg is BaseLaunchpegNFT {
     /// @notice Returns the current phase
     /// @return phase Current phase
     function currentPhase() public view returns (Phase) {
+        // * this will always return true,
+        // * since the phase for public sales
+        // * is the block.timestamp at deployment time
         if (
             publicSaleStartTime == 0 ||
             block.timestamp < publicSaleStartTime

@@ -4,7 +4,7 @@ pragma solidity ^0.8.4;
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
-
+import "hardhat/console.sol";
 
 interface ISafuFactory {
     function getPair(address, address) external returns (address);
@@ -25,6 +25,7 @@ interface ISafuPair {
         address to, 
         bytes calldata data
     ) external;
+    function totalSupply() external view returns (uint256);
 }
 
 // SafuMakerV2 is SafuSwap's left hand and kinda a wizard. He can cook up SAFU from pretty much anything!
@@ -78,24 +79,53 @@ contract SafuMakerV2 is Ownable {
     function bridgeFor(address token) public view returns (address bridge) {
         bridge = _bridges[token];
         if (bridge == address(0)) {
+            // * bridge of address 0 is USDC.
             bridge = usdc;
         }
     }
 
     /// @dev converts a single trading pair's rewards into SAFU token
     function _convert(address token0, address token1) internal {
+    
         ISafuPair pair = ISafuPair(factory.getPair(token0, token1));
 
         require(address(pair) != address(0), "SafuMakerV2: Invalid pair");
         
+
+        // * trasnfer LP tokens to the pair pool
+        (uint256 reserve1, uint256 reserve0, ) = pair.getReserves();
+        // console.log("reserv0",reserve1);
+        // console.log("reserv1",reserve0);
+
+       
+        // * this contract currently hold 
         IERC20(address(pair)).safeTransfer(address(pair), pair.balanceOf(address(this)));
 
         // We don't take amount0 and amount1 from here, as it won't take into account reflect tokens.
+        // * burn the liqudity token held by this contract
+        // * and recieve token1 and token0 amounts.
+
+        //  * we burn 999999900 in SLP1
+        // * and get Safu and SLP
+        // console.log("token 0 before",IERC20(address(token0)).balanceOf(address(this)));
+        // console.log("token 1 before",IERC20(address(token1)).balanceOf(address(this)));
         pair.burn(address(this));
+        // * this contract already hold a poriton of SLP token amount
+        // * sent by the admin.
+        // console.log("token 0 after",IERC20(address(token0)).balanceOf(address(this)));
+        // console.log("token 1 after",IERC20(address(token1)).balanceOf(address(this)));
+        // ( reserve1, reserve0, ) = pair.getReserves();
+        // console.log("reserv0",reserve1);
+        // console.log("reserv1",reserve0);
 
         // We get the amount0 and amount1 by their respective balance of SafuMakerV2.
         uint256 amount0 = IERC20(token0).balanceOf(address(this));
         uint256 amount1 = IERC20(token1).balanceOf(address(this));
+        //console.log("safu balance",amount0 );
+        //console.log("SLP1 balance",amount1 );
+        // * token0 is Safu
+        // * token1 is SafePair SLP
+
 
         _convertStep(token0, token1, amount0, amount1);
     }
@@ -122,30 +152,53 @@ contract SafuMakerV2 is Ownable {
 
         } else if (token0 == safu) {
             IERC20(safu).safeTransfer(bar, amount0);
+            console.log("amount1",amount1);
+            // * this goes to convert SLP to Safu through
+            // * our pool Safu/SLP
+            // * meaning is gives us SLP and get Safu out.
+            // * this pool has very few Safu an alot of SLP
+            // * amount of incoming SLP is HUGE! and existing Safu
+            // * is VERY SMALL = HUGE SLIPPAGAE
+            // * keep in mind that the contract will attempt
+            // * to convert ALL of SLP it has.
+            // * this includes the 10_000 sent by the admin + small amout
+            // * deposited by the attacker.
+
+            // * this will send 10000099999990000000000 SLP to our attacker pool!
             safuOut = _toSafu(token1, amount1) + (amount0);
         } else if (token1 == safu) {
             IERC20(safu).safeTransfer(bar, amount1);
             safuOut = _toSafu(token0, amount0) + (amount1);
-
         } else if (token0 == usdc) {
-            safuOut = _toSafu(usdc, _swap(token1, usdc, amount1, address(this)) + (amount0));
+            safuOut = _toSafu(usdc, 
+            // * converting token1 Amount to USDC amount
+            // * then add amount 0 to it and conver the final amount to safu
+            _swap(token1, usdc, amount1, address(this)) + (amount0));
         } else if (token1 == usdc) {
+            // * convert amount 0 to USDC
+            // * then add amount 1 to 0, then convert the final amount to safu.
             safuOut = _toSafu(usdc, _swap(token0, usdc, amount0, address(this)) + (amount1));
-
         } else {
+           
             address bridge0 = bridgeFor(token0);
+       
             address bridge1 = bridgeFor(token1);
+            
             if (bridge0 == token1) {
+             
                 safuOut = _convertStep(bridge0, token1, _swap(token0, bridge0, amount0, address(this)), amount1);
             } else if (bridge1 == token0) {
+              
                 safuOut = _convertStep(token0, bridge1, amount0, _swap(token1, bridge1, amount1, address(this)));
             } else {
+            
                 safuOut = _convertStep(
                     bridge0,
                     bridge1,
                     _swap(token0, bridge0, amount0, address(this)),
                     _swap(token1, bridge1, amount1, address(this))
                 );
+               
             }
         }
     }
@@ -160,14 +213,18 @@ contract SafuMakerV2 is Ownable {
         ISafuPair pair = ISafuPair(factory.getPair(fromToken, toToken));
         require(address(pair) != address(0), "SafuMakerV2: Cannot convert");
 
+        // * get the amount of tokens in the pair contract.
         (uint256 reserve0, uint256 reserve1, ) = pair.getReserves();
-
+        console.log("reserves",reserve0 , reserve1 );
+        console.log("address",address(fromToken));
         IERC20(fromToken).safeTransfer(address(pair), amountIn);
 
         // Added in case fromToken is a reflect token.
         if (fromToken == pair.token0()) {
+            // * get the exact amountIn transfered  to the pair.
             amountIn = IERC20(fromToken).balanceOf(address(pair)) - reserve0;
         } else {
+            // * get the exact amountIn transfered  to the pair.
             amountIn = IERC20(fromToken).balanceOf(address(pair)) - reserve1;
         }
 
@@ -183,6 +240,7 @@ contract SafuMakerV2 is Ownable {
         }
 
         realAmountOut = IERC20(toToken).balanceOf(to) - balanceBefore;
+  
     }
 
     /// @dev swap from any token to SAFU token

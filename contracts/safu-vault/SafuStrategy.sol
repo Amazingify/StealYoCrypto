@@ -60,18 +60,24 @@ contract SafuStrategy is Ownable, Pausable {
     function withdraw(uint256 _amount) external {
         require(msg.sender == vault, "not vault");
 
+        // * gets the balance of the vault.
         uint256 wantBal = IERC20(want).balanceOf(address(this));
 
         if (wantBal < _amount) {
+            // * if the amount is greater than the wantBal
+            // * then set wantBal to the total balance of the strategy.
             // withdraws funds depositied into yield generator & sends back to this address
             // ...
             wantBal = IERC20(want).balanceOf(address(this));
         }
 
         if (wantBal > _amount) {
+            // * if the balance is greater than the amount
+            // * set the wanBal to the amount.
             wantBal = _amount;
         }
 
+        // * finally, withdraw wantBal.
         IERC20(want).safeTransfer(vault, wantBal); 
     }
 
